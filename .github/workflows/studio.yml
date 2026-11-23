@@ -46,7 +46,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download video-storage -p "${{ github.event.inputs.video_filename }}"
+          gh release download video-storage \
+            -R "${{ github.repository }}" \
+            -p "${{ github.event.inputs.video_filename }}"
 
       - name: Start RTMP Stream
         env:
