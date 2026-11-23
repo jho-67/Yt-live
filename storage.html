@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Video Storage Manager</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --secondary: #475569;
+    }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 640px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    h1 { margin: 0 0 0.25rem 0; font-size: 1.45rem; }
+    h2 { margin: 0 0 1rem 0; font-size: 1.15rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 540px) { .grid { grid-template-columns: 1fr; } }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    input, select {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .row { display: flex; gap: 0.75rem; align-items: flex-end; }
+    .row > div { flex: 1; }
+    button {
+      padding: 0.65rem 1.1rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: var(--secondary); }
+    button.danger { background: var(--danger); }
+    button.danger:hover { background: var(--danger-hover); }
+    .progress-wrap {
+      display: none;
+      margin-top: 0.85rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      height: 10px;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      transition: width 0.15s ease;
+    }
+    .status-box {
+      padding: 0.85rem;
+      border-radius: 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div>
+      <h1>GitHub Video Storage</h1>
+      <div style="color: var(--muted); font-size: 0.9rem;">Upload from local storage or delete from GitHub Release (video-storage)</div>
+    </div>
+
+    <div class="card">
+      <h2>1. GitHub Connection</h2>
+      <div class="grid">
+        <div>
+          <label>Repository (owner/repo)</label>
+          <input type="text" id="repo" placeholder="jho-67/Y1" />
+        </div>
+        <div>
+          <label>GitHub Personal Access Token</label>
+          <input type="password" id="token" placeholder="github_pat_... or ghp_..." />
+        </div>
+      </div>
+      <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+        <button onclick="saveAndLoad()">Save & Load Videos</button>
+        <button class="secondary" onclick="fetchVideos()">Refresh List</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. Upload Video From Local Storage</h2>
+      <div class="row">
+        <div>
+          <label>Select Local Video File</label>
+          <input type="file" id="videoFile" accept="video/*" />
+        </div>
+        <button onclick="uploadVideo()">Upload</button>
+      </div>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>3. Delete Stored Video</h2>
+      <div class="row">
+        <div>
+          <label>Stored Videos in GitHub</label>
+          <select id="videoSelect">
+            <option value="">-- Load videos first --</option>
+          </select>
+        </div>
+        <button class="danger" onclick="deleteVideo()">Delete</button>
+      </div>
+    </div>
+
+    <div class="status-box" id="statusLog">Ready.</div>
+  </div>
+
+  <script>
+    const RELEASE_TAG = 'video-storage';
+
+    const log = (msg) => {
+      document.getElementById('statusLog').textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    };
+
+    window.onload = () => {
+      document.getElementById('repo').value = localStorage.getItem('gh_repo') || 'jho-67/Y1';
+      document.getElementById('token').value = localStorage.getItem('gh_token') || '';
+      if (document.getElementById('repo').value && document.getElementById('token').value) {
+        fetchVideos();
+      }
+    };
+
+    function getHeaders(isBinary = false) {
+      const token = document.getElementById('token').value.trim();
+      const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      };
+      if (!isBinary) headers['Content-Type'] = 'application/json';
+      return headers;
+    }
+
+    function saveAndLoad() {
+      localStorage.setItem('gh_repo', document.getElementById('repo').value.trim());
+      localStorage.setItem('gh_token', document.getElementById('token').value.trim());
+      fetchVideos();
+    }
+
+    async function ensureRelease(repo) {
+      const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/${RELEASE_TAG}`, {
+        headers: getHeaders()
+      });
+      if (res.status === 200) return await res.json();
+      if (res.status !== 404) throw new Error(`Release lookup failed (${res.status})`);
+
+      const createRes = await fetch(`https://api.github.com/repos/${repo}/releases`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          tag_name: RELEASE_TAG,
+          name: 'Video Storage',
+          body: 'Uploaded videos stored for streaming'
+        })
+      });
+      if (!createRes.ok) throw new Error(`Failed to create release (${createRes.status})`);
+      return await createRes.json();
+    }
+
+    function sendUpload(url, token, file, contentType) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const wrap = document.getElementById('progressWrap');
+        const bar = document.getElementById('progressBar');
+        wrap.style.display = 'block';
+        bar.style.width = '0%';
+
+        xhr.open('POST', url);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.setRequestHeader('Accept', 'application/vnd.github+json');
+        xhr.setRequestHeader('X-GitHub-Api-Version', '2022-11-28');
+        xhr.setRequestHeader('Content-Type', contentType);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            bar.style.width = `${pct}%`;
+            log(`Uploading "${file.name}"... ${pct}%`);
+          }
+        };
+
+        xhr.onload = () => {
+          wrap.style.display = 'none';
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Upload failed (${xhr.status}). Max asset size is 2 GB.`));
+          }
+        };
+
+        xhr.onerror = () => {
+          wrap.style.display = 'none';
+          reject(new Error('Network error while uploading.'));
+        };
+
+        xhr.send(file);
+      });
+    }
+
+    async function uploadVideo() {
+      const repo = document.getElementById('repo').value.trim();
+      const token = document.getElementById('token').value.trim();
+      const fileInput = document.getElementById('videoFile');
+      const file = fileInput.files[0];
+
+      if (!repo || !token) return log('Enter Repository and Token first.');
+      if (!file) return log('Pick a local video file first.');
+
+      const extMatch = file.name.match(/\.[a-zA-Z0-9]+$/);
+      const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
+      const base = file.name
+        .replace(/\.[a-zA-Z0-9]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'video';
+      const safeName = `${base}${ext}`;
+
+      log(`Preparing upload for "${safeName}"...`);
+
+      try {
+        const release = await ensureRelease(repo);
+        const existing = (release.assets || []).find(a => a.name === safeName);
+        if (existing) {
+          await fetch(`https://api.github.com/repos/${repo}/releases/assets/${existing.id}`, {
+            method: 'DELETE',
+            headers: getHeaders()
+          });
+        }
+
+        const uploadUrl = `https://uploads.github.com/repos/${repo}/releases/${release.id}/assets?name=${encodeURIComponent(safeName)}`;
+        await sendUpload(uploadUrl, token, file, file.type || 'video/mp4');
+
+        fileInput.value = '';
+        log(`Uploaded "${safeName}" to GitHub storage.`);
+        await fetchVideos();
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    async function fetchVideos() {
+      const repo = document.getElementById('repo').value.trim();
+      if (!repo) return log('Enter Repository first.');
+
+      log('Loading stored videos...');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/${RELEASE_TAG}`, {
+          headers: getHeaders()
+        });
+
+        const select = document.getElementById('videoSelect');
+        select.innerHTML = '';
+
+        if (res.status === 404) {
+          select.innerHTML = '<option value="">-- No videos uploaded yet --</option>';
+          return log('Release not created yet. Upload a video to create it.');
+        }
+        if (!res.ok) throw new Error(`API error (${res.status})`);
+
+        const data = await res.json();
+        if (!data.assets || data.assets.length === 0) {
+          select.innerHTML = '<option value="">-- No videos in storage --</option>';
+          return log('No videos found in storage.');
+        }
+
+        data.assets.forEach(asset => {
+          const mb = (asset.size / (1024 * 1024)).toFixed(1);
+          const opt = document.createElement('option');
+          opt.value = asset.name;
+          opt.dataset.assetId = asset.id;
+          opt.textContent = `${asset.name} (${mb} MB)`;
+          select.appendChild(opt);
+        });
+
+        log(`Loaded ${data.assets.length} video(s).`);
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    async function deleteVideo() {
+      const repo = document.getElementById('repo').value.trim();
+      const select = document.getElementById('videoSelect');
+      const opt = select.options[select.selectedIndex];
+
+      if (!repo || !opt || !opt.dataset.assetId) {
+        return log('Select a stored video to delete.');
+      }
+
+      const name = opt.value;
+      const assetId = opt.dataset.assetId;
+
+      if (!confirm(`Delete "${name}" from GitHub storage?`)) return;
+
+      log(`Deleting "${name}"...`);
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/assets/${assetId}`, {
+          method: 'DELETE',
+          headers: getHeaders()
+        });
+
+        if (res.status !== 204 && !res.ok) {
+          throw new Error(`Delete failed (${res.status})`);
+        }
+
+        log(`Deleted "${name}".`);
+        await fetchVideos();
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+  </script>
+</body>
+</html>
