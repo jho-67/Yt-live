@@ -89,6 +89,11 @@
       color: var(--muted);
       white-space: pre-wrap;
     }
+    .divider {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 1.25rem 0;
+    }
   </style>
 </head>
 <body>
@@ -114,22 +119,21 @@
       </div>
     </div>
 
-    <!-- 2. Download YouTube Video -->
+    <!-- 2. Upload & Manage Stored Videos -->
     <div class="card">
-      <h2>2. Download YouTube Video to GitHub Storage</h2>
+      <h2>2. GitHub Storage</h2>
+
       <div class="row">
         <div>
-          <label>YouTube Video URL</label>
-          <input type="url" id="ytUrl" placeholder="https://www.youtube.com/watch?v=..." />
+          <label>Upload Video File (.mp4)</label>
+          <input type="file" id="videoFile" accept="video/mp4,video/*" />
         </div>
-        <button onclick="triggerDownload()">Download to GitHub</button>
+        <button onclick="uploadLocalVideo()">Upload to GitHub</button>
       </div>
-    </div>
 
-    <!-- 3. Ready to Stream & Storage Management -->
-    <div class="card">
-      <h2>3. Stream Configuration</h2>
-      <div class="row" style="margin-bottom: 1rem;">
+      <hr class="divider" />
+
+      <div class="row">
         <div>
           <label>Select Video from GitHub Storage</label>
           <select id="videoSelect">
@@ -138,7 +142,11 @@
         </div>
         <button class="danger" onclick="deleteSelectedVideo()">Delete Video</button>
       </div>
+    </div>
 
+    <!-- 3. Stream Configuration -->
+    <div class="card">
+      <h2>3. Stream Configuration</h2>
       <div class="grid">
         <div>
           <label>YouTube Stream Key</label>
@@ -153,14 +161,14 @@
       <div class="toggle-row">
         <div>
           <strong>Loop Video (loop = true / false)</strong>
-          <div style="font-size: 0.8rem; color: var(--muted);">Continuously replay the video until stopped</div>
+          <div style="font-size: 0.8rem; color: var(--muted);">Continuously replay selected video until stopped</div>
         </div>
         <input type="checkbox" id="loopToggle" />
       </div>
 
       <div style="display: flex; gap: 0.75rem;">
         <button class="success" style="flex: 1;" onclick="startStream()">Ready to Stream (Start)</button>
-        <button class="danger" onclick="stopActiveStreams()">Stop Active Runs</button>
+        <button class="danger" onclick="stopActiveStreams()">Stop Active Stream</button>
       </div>
     </div>
 
@@ -185,20 +193,84 @@
       }
     };
 
-    function getHeaders() {
+    function getHeaders(isBinary = false) {
       const token = document.getElementById('token').value.trim();
-      return {
+      const headers = {
         'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json'
+        'X-GitHub-Api-Version': '2022-11-28'
       };
+      if (!isBinary) headers['Content-Type'] = 'application/json';
+      return headers;
     }
 
     function saveConfig() {
       localStorage.setItem('gh_repo', document.getElementById('repo').value.trim());
       localStorage.setItem('gh_token', document.getElementById('token').value.trim());
       fetchVideos();
+    }
+
+    async function ensureReleaseExists(repo) {
+      const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/video-storage`, {
+        headers: getHeaders()
+      });
+      if (res.status === 200) return await res.json();
+      if (res.status !== 404) throw new Error(`Release lookup failed (${res.status})`);
+
+      const createRes = await fetch(`https://api.github.com/repos/${repo}/releases`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          tag_name: 'video-storage',
+          name: 'Video Storage',
+          body: 'Stored videos for live streaming'
+        })
+      });
+      if (!createRes.ok) throw new Error(`Failed to create video-storage release (${createRes.status})`);
+      return await createRes.json();
+    }
+
+    async function uploadLocalVideo() {
+      const repo = document.getElementById('repo').value.trim();
+      const fileInput = document.getElementById('videoFile');
+      const file = fileInput.files[0];
+
+      if (!repo) return log('Please enter a repository (owner/repo) first.');
+      if (!file) return log('Choose a video file first.');
+
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      log(`Uploading "${cleanName}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
+
+      try {
+        const release = await ensureReleaseExists(repo);
+        const existingAsset = (release.assets || []).find(a => a.name === cleanName);
+        if (existingAsset) {
+          await fetch(`https://api.github.com/repos/${repo}/releases/assets/${existingAsset.id}`, {
+            method: 'DELETE',
+            headers: getHeaders()
+          });
+        }
+
+        const uploadUrl = `https://uploads.github.com/repos/${repo}/releases/${release.id}/assets?name=${encodeURIComponent(cleanName)}`;
+        const uploadHeaders = getHeaders(true);
+        uploadHeaders['Content-Type'] = file.type || 'application/octet-stream';
+
+        const uploadRes = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: uploadHeaders,
+          body: file
+        });
+
+        if (!uploadRes.ok) {
+          throw new Error(`Upload failed (${uploadRes.status}). GitHub release asset limit is 2 GB per file.`);
+        }
+
+        fileInput.value = '';
+        log(`Uploaded "${cleanName}" to GitHub storage.`);
+        await fetchVideos();
+      } catch (err) {
+        log(`Upload error: ${err.message}`);
+      }
     }
 
     async function fetchVideos() {
@@ -212,8 +284,8 @@
         });
 
         if (res.status === 404) {
-          document.getElementById('videoSelect').innerHTML = '<option value="">No videos found yet. Download one above.</option>';
-          return log('Storage release not created yet. Download a YouTube video first.');
+          document.getElementById('videoSelect').innerHTML = '<option value="">No videos found yet. Upload one above.</option>';
+          return log('Storage release not created yet.');
         }
         if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
 
@@ -275,33 +347,6 @@
       }
     }
 
-    async function triggerDownload() {
-      const repo = document.getElementById('repo').value.trim();
-      const youtube_url = document.getElementById('ytUrl').value.trim();
-      if (!repo || !youtube_url) return log('Repository and YouTube URL are required.');
-
-      log('Triggering GitHub Action to download video...');
-      try {
-        const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({
-            ref: 'main',
-            inputs: {
-              action: 'download',
-              youtube_url
-            }
-          })
-        });
-
-        if (!res.ok) throw new Error(`Failed to dispatch workflow (${res.status}). Ensure default branch is "main".`);
-        document.getElementById('ytUrl').value = '';
-        log('Download workflow started! Wait 1–2 minutes for GitHub Actions to finish, then click "Refresh Storage".');
-      } catch (err) {
-        log(`Error: ${err.message}`);
-      }
-    }
-
     async function startStream() {
       const repo = document.getElementById('repo').value.trim();
       const video_filename = document.getElementById('videoSelect').value;
@@ -343,7 +388,7 @@
       const repo = document.getElementById('repo').value.trim();
       if (!repo) return;
 
-      log('Checking for active workflow runs to cancel...');
+      log('Checking for active stream runs to cancel...');
       try {
         const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?status=in_progress`, {
           headers: getHeaders()
@@ -351,7 +396,7 @@
         const data = await res.json();
 
         if (!data.workflow_runs || data.workflow_runs.length === 0) {
-          return log('No active workflow runs currently in progress.');
+          return log('No active stream workflows currently running.');
         }
 
         for (const run of data.workflow_runs) {
@@ -360,9 +405,9 @@
             headers: getHeaders()
           });
         }
-        log(`Cancelled ${data.workflow_runs.length} active workflow run(s).`);
+        log(`Cancelled ${data.workflow_runs.length} active stream(s).`);
       } catch (err) {
-        log(`Error stopping runs: ${err.message}`);
+        log(`Error stopping stream: ${err.message}`);
       }
     }
   </script>
