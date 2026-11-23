@@ -1,0 +1,108 @@
+name: Stream Studio
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to run (download or stream)'
+        required: true
+        type: choice
+        options:
+          - download
+          - stream
+      youtube_url:
+        description: 'YouTube Video URL (for download)'
+        required: false
+        type: string
+      video_filename:
+        description: 'Exact filename in video-storage release (for stream)'
+        required: false
+        type: string
+      stream_key:
+        description: 'YouTube Live Stream Key (for stream)'
+        required: false
+        type: string
+      loop:
+        description: 'Loop video true/false (for stream)'
+        required: false
+        default: 'false'
+        type: string
+      rtmp_url:
+        description: 'RTMP Server URL (for stream)'
+        required: false
+        default: 'rtmp://a.rtmp.youtube.com/live2'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    if: github.event.inputs.action == 'download'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install yt-dlp and ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          chmod a+rx /usr/local/bin/yt-dlp
+
+      - name: Download Video
+        run: |
+          mkdir -p downloads
+          yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --restrict-filenames \
+            -o "downloads/%(title)s.%(ext)s" \
+            "${{ github.event.inputs.youtube_url }}"
+          ls -lh downloads/
+
+      - name: Ensure Storage Release Exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view video-storage || gh release create video-storage --title "Video Storage" --notes "Downloaded videos for streaming"
+
+      - name: Upload Video to GitHub Release Storage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in downloads/*; do
+            gh release upload video-storage "$file" --clobber
+          done
+
+  stream:
+    if: github.event.inputs.action == 'stream'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Download Video from GitHub Storage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download video-storage -p "${{ github.event.inputs.video_filename }}"
+
+      - name: Start RTMP Stream
+        env:
+          STREAM_KEY: ${{ github.event.inputs.stream_key }}
+          RTMP_URL: ${{ github.event.inputs.rtmp_url }}
+          VIDEO_FILE: ${{ github.event.inputs.video_filename }}
+          LOOP_FLAG: ${{ github.event.inputs.loop }}
+        run: |
+          if [ "$LOOP_FLAG" = "true" ]; then
+            LOOP_ARGS="-stream_loop -1"
+          else
+            LOOP_ARGS=""
+          fi
+
+          ffmpeg -re $LOOP_ARGS -i "$VIDEO_FILE" \
+            -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k \
+            -pix_fmt yuv420p -g 50 \
+            -c:a aac -b:a 128k -ar 44100 \
+            -f flv "${RTMP_URL}/${STREAM_KEY}"
+            
