@@ -4,31 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Action to run (download or stream)'
+        description: 'Action to run'
         required: true
         type: choice
         options:
-          - download
           - stream
-      youtube_url:
-        description: 'YouTube Video URL (for download)'
-        required: false
-        type: string
       video_filename:
-        description: 'Exact filename in video-storage release (for stream)'
-        required: false
+        description: 'Exact filename in video-storage release'
+        required: true
         type: string
       stream_key:
-        description: 'YouTube Live Stream Key (for stream)'
-        required: false
+        description: 'YouTube Live Stream Key'
+        required: true
         type: string
       loop:
-        description: 'Loop video true/false (for stream)'
-        required: false
+        description: 'Loop video true/false'
+        required: true
         default: 'false'
         type: string
       rtmp_url:
-        description: 'RTMP Server URL (for stream)'
+        description: 'RTMP Server URL'
         required: false
         default: 'rtmp://a.rtmp.youtube.com/live2'
         type: string
@@ -37,40 +32,6 @@ permissions:
   contents: write
 
 jobs:
-  download:
-    if: github.event.inputs.action == 'download'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install yt-dlp and ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          chmod a+rx /usr/local/bin/yt-dlp
-
-      - name: Download Video
-        run: |
-          mkdir -p downloads
-          yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
-            --restrict-filenames \
-            -o "downloads/%(title)s.%(ext)s" \
-            "${{ github.event.inputs.youtube_url }}"
-          ls -lh downloads/
-
-      - name: Ensure Storage Release Exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view video-storage || gh release create video-storage --title "Video Storage" --notes "Downloaded videos for streaming"
-
-      - name: Upload Video to GitHub Release Storage
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for file in downloads/*; do
-            gh release upload video-storage "$file" --clobber
-          done
-
   stream:
     if: github.event.inputs.action == 'stream'
     runs-on: ubuntu-latest
