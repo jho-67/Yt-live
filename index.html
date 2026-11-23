@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Actions Live Stream Controller</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    h1, h2 { margin: 0 0 1rem 0; font-size: 1.25rem; }
+    h1 { font-size: 1.5rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    input, select {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .row { display: flex; gap: 0.75rem; align-items: flex-end; }
+    .row > div { flex: 1; }
+    button {
+      padding: 0.65rem 1.1rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--primary);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: var(--border); }
+    button.danger { background: var(--danger); }
+    button.danger:hover { background: var(--danger-hover); }
+    button.success { background: var(--success); color: #052e16; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 1rem 0;
+    }
+    .toggle-row input[type="checkbox"] { width: 1.2rem; height: 1.2rem; accent-color: var(--primary); }
+    .status-box {
+      padding: 0.85rem;
+      border-radius: 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>GitHub Actions Stream Studio</h1>
+
+    <!-- 1. GitHub Connection -->
+    <div class="card">
+      <h2>1. GitHub Storage Connection</h2>
+      <div class="grid">
+        <div>
+          <label>Repository (owner/repo)</label>
+          <input type="text" id="repo" placeholder="username/stream-repo" />
+        </div>
+        <div>
+          <label>GitHub Personal Access Token</label>
+          <input type="password" id="token" placeholder="ghp_xxxxxxxxxxxx" />
+        </div>
+      </div>
+      <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+        <button onclick="saveConfig()">Save & Load Videos</button>
+        <button class="secondary" onclick="fetchVideos()">Refresh Storage</button>
+      </div>
+    </div>
+
+    <!-- 2. Download YouTube Video -->
+    <div class="card">
+      <h2>2. Download YouTube Video to GitHub Storage</h2>
+      <div class="row">
+        <div>
+          <label>YouTube Video URL</label>
+          <input type="url" id="ytUrl" placeholder="https://www.youtube.com/watch?v=..." />
+        </div>
+        <button onclick="triggerDownload()">Download to GitHub</button>
+      </div>
+    </div>
+
+    <!-- 3. Ready to Stream & Storage Management -->
+    <div class="card">
+      <h2>3. Stream Configuration</h2>
+      <div class="row" style="margin-bottom: 1rem;">
+        <div>
+          <label>Select Video from GitHub Storage</label>
+          <select id="videoSelect">
+            <option value="">-- Connect GitHub to load videos --</option>
+          </select>
+        </div>
+        <button class="danger" onclick="deleteSelectedVideo()">Delete Video</button>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>YouTube Stream Key</label>
+          <input type="password" id="streamKey" placeholder="xxxx-xxxx-xxxx-xxxx-xxxx" />
+        </div>
+        <div>
+          <label>RTMP Server URL</label>
+          <input type="text" id="rtmpUrl" value="rtmp://a.rtmp.youtube.com/live2" />
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <strong>Loop Video (loop = true / false)</strong>
+          <div style="font-size: 0.8rem; color: var(--muted);">Continuously replay the video until stopped</div>
+        </div>
+        <input type="checkbox" id="loopToggle" />
+      </div>
+
+      <div style="display: flex; gap: 0.75rem;">
+        <button class="success" style="flex: 1;" onclick="startStream()">Ready to Stream (Start)</button>
+        <button class="danger" onclick="stopActiveStreams()">Stop Active Runs</button>
+      </div>
+    </div>
+
+    <!-- Status Output -->
+    <div class="status-box" id="statusLog">Ready. Enter your GitHub repository and token to begin.</div>
+  </div>
+
+  <script>
+    const WORKFLOW_FILE = 'studio.yml';
+
+    const log = (msg) => {
+      const box = document.getElementById('statusLog');
+      box.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    };
+
+    window.onload = () => {
+      document.getElementById('repo').value = localStorage.getItem('gh_repo') || '';
+      document.getElementById('token').value = localStorage.getItem('gh_token') || '';
+      document.getElementById('streamKey').value = localStorage.getItem('yt_stream_key') || '';
+      if (document.getElementById('repo').value && document.getElementById('token').value) {
+        fetchVideos();
+      }
+    };
+
+    function getHeaders() {
+      const token = document.getElementById('token').value.trim();
+      return {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json'
+      };
+    }
+
+    function saveConfig() {
+      localStorage.setItem('gh_repo', document.getElementById('repo').value.trim());
+      localStorage.setItem('gh_token', document.getElementById('token').value.trim());
+      fetchVideos();
+    }
+
+    async function fetchVideos() {
+      const repo = document.getElementById('repo').value.trim();
+      if (!repo) return log('Please enter a repository (owner/repo).');
+
+      log('Fetching stored videos from GitHub Release (video-storage)...');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/video-storage`, {
+          headers: getHeaders()
+        });
+
+        if (res.status === 404) {
+          document.getElementById('videoSelect').innerHTML = '<option value="">No videos found yet. Download one above.</option>';
+          return log('Storage release not created yet. Download a YouTube video first.');
+        }
+        if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
+
+        const data = await res.json();
+        const select = document.getElementById('videoSelect');
+        select.innerHTML = '';
+
+        if (!data.assets || data.assets.length === 0) {
+          select.innerHTML = '<option value="">No videos in storage yet.</option>';
+          return log('Storage is empty.');
+        }
+
+        data.assets.forEach(asset => {
+          const sizeMB = (asset.size / (1024 * 1024)).toFixed(1);
+          const opt = document.createElement('option');
+          opt.value = asset.name;
+          opt.dataset.assetId = asset.id;
+          opt.textContent = `${asset.name} (${sizeMB} MB)`;
+          select.appendChild(opt);
+        });
+
+        log(`Loaded ${data.assets.length} video(s) from GitHub storage.`);
+      } catch (err) {
+        log(`Error loading videos: ${err.message}`);
+      }
+    }
+
+    async function deleteSelectedVideo() {
+      const repo = document.getElementById('repo').value.trim();
+      const select = document.getElementById('videoSelect');
+      const selectedOption = select.options[select.selectedIndex];
+
+      if (!repo || !selectedOption || !selectedOption.dataset.assetId) {
+        return log('Select a valid video from the dropdown first.');
+      }
+
+      const filename = selectedOption.value;
+      const assetId = selectedOption.dataset.assetId;
+
+      if (!confirm(`Permanently delete "${filename}" from GitHub storage?`)) {
+        return;
+      }
+
+      log(`Deleting "${filename}" from GitHub storage...`);
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/assets/${assetId}`, {
+          method: 'DELETE',
+          headers: getHeaders()
+        });
+
+        if (res.status !== 204 && !res.ok) {
+          throw new Error(`Delete failed (${res.status}). Check token "Contents: Read & Write" permission.`);
+        }
+
+        log(`Deleted "${filename}" from GitHub storage.`);
+        await fetchVideos();
+      } catch (err) {
+        log(`Error deleting video: ${err.message}`);
+      }
+    }
+
+    async function triggerDownload() {
+      const repo = document.getElementById('repo').value.trim();
+      const youtube_url = document.getElementById('ytUrl').value.trim();
+      if (!repo || !youtube_url) return log('Repository and YouTube URL are required.');
+
+      log('Triggering GitHub Action to download video...');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            ref: 'main',
+            inputs: {
+              action: 'download',
+              youtube_url
+            }
+          })
+        });
+
+        if (!res.ok) throw new Error(`Failed to dispatch workflow (${res.status}). Ensure default branch is "main".`);
+        document.getElementById('ytUrl').value = '';
+        log('Download workflow started! Wait 1–2 minutes for GitHub Actions to finish, then click "Refresh Storage".');
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    async function startStream() {
+      const repo = document.getElementById('repo').value.trim();
+      const video_filename = document.getElementById('videoSelect').value;
+      const stream_key = document.getElementById('streamKey').value.trim();
+      const rtmp_url = document.getElementById('rtmpUrl').value.trim();
+      const loop = document.getElementById('loopToggle').checked ? 'true' : 'false';
+
+      if (!repo || !video_filename || !stream_key) {
+        return log('Select a video and enter your YouTube Stream Key before starting.');
+      }
+
+      localStorage.setItem('yt_stream_key', stream_key);
+      log(`Starting live stream for "${video_filename}" (loop = ${loop})...`);
+
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            ref: 'main',
+            inputs: {
+              action: 'stream',
+              video_filename,
+              stream_key,
+              loop,
+              rtmp_url
+            }
+          })
+        });
+
+        if (!res.ok) throw new Error(`Failed to start stream (${res.status})`);
+        log(`Stream workflow dispatched! Your broadcast will appear on YouTube Live within ~20 seconds. (Loop = ${loop})`);
+      } catch (err) {
+        log(`Error: ${err.message}`);
+      }
+    }
+
+    async function stopActiveStreams() {
+      const repo = document.getElementById('repo').value.trim();
+      if (!repo) return;
+
+      log('Checking for active workflow runs to cancel...');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?status=in_progress`, {
+          headers: getHeaders()
+        });
+        const data = await res.json();
+
+        if (!data.workflow_runs || data.workflow_runs.length === 0) {
+          return log('No active workflow runs currently in progress.');
+        }
+
+        for (const run of data.workflow_runs) {
+          await fetch(`https://api.github.com/repos/${repo}/actions/runs/${run.id}/cancel`, {
+            method: 'POST',
+            headers: getHeaders()
+          });
+        }
+        log(`Cancelled ${data.workflow_runs.length} active workflow run(s).`);
+      } catch (err) {
+        log(`Error stopping runs: ${err.message}`);
+      }
+    }
+  </script>
+</body>
+</html>
